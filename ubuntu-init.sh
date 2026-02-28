@@ -2,13 +2,11 @@
 set -e
 
 # ===================== 核心配置项 =====================
-# 可根据需求修改默认值
-TARGET_TIMEZONE="Asia/Shanghai"  # 目标时区
-TARGET_MIRROR="aliyun"           # 软件源：aliyun/tuna/163/ustc
-RELEASE_VERSION=$(lsb_release -sc 2>/dev/null || echo "jammy")  # 自动识别系统版本
-# Docker加速镜像配置（默认阿里云）
+TARGET_TIMEZONE="Asia/Shanghai"
+TARGET_MIRROR="aliyun"
+RELEASE_VERSION=$(lsb_release -sc 2>/dev/null || echo "jammy")
 DOCKER_MIRROR="https://mirror.aliyun.com/docker-ce/"
-DOCKER_REGISTRY_MIRROR="https://xxxxxx.mirror.aliyuncs.com"  # 需替换为自己的阿里云镜像加速地址（或用公共源）
+DOCKER_REGISTRY_MIRROR="https://docker.mirrors.ustc.edu.cn"  # 默认公共源
 
 # ===================== 颜色定义 =====================
 GREEN="\033[32m"
@@ -17,263 +15,211 @@ RED="\033[31m"
 BLUE="\033[34m"
 PURPLE="\033[35m"
 CYAN="\033[36m"
+WHITE="\033[37m"
+BG_BLUE="\033[44m"
 NC="\033[0m"
 
 # 日志打印函数
-info() { echo -e "${GREEN}[INFO] $*${NC}"; }
-warn() { echo -e "${YELLOW}[WARN] $*${NC}"; }
-error() { echo -e "${RED}[ERROR] $*${NC}"; exit 1; }
-success() { echo -e "${CYAN}[SUCCESS] $*${NC}"; }
-title() { echo -e "\n${BLUE}===== $* =====${NC}"; }
-menu_title() { echo -e "\n${PURPLE}===== $* =====${NC}"; }
+info() { echo -e "${GREEN}[INFO]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+success() { echo -e "${CYAN}[SUCCESS]${NC} $*"; }
+menu_head() { echo -e "\n${BG_BLUE}${WHITE}===== $* =====${NC}"; }
+menu_title() { echo -e "${PURPLE}→ $*${NC}"; }
 
-# ===================== 全局变量 =====================
-# 配置选择
-CHOICE_TZ="Y"
-CHOICE_MIRROR="Y"
-CHOICE_BASE="Y"
-CHOICE_CN="Y"
-CHOICE_DESKTOP="0"
-CHOICE_XRDP="N"  # XRDP远程桌面选择
-CHOICE_DOCKER="N"
-CHOICE_DOCKER_MIRROR="Y"
-CONFIRM="Y"
+# ===================== 全局状态管理 =====================
+# 功能执行状态（key:功能名, value:状态）
+declare -A EXEC_STATUS=(
+    ["时区设置"]="未执行"
+    ["软件源更换"]="未执行"
+    ["基础工具安装"]="未执行"
+    ["中文环境配置"]="未执行"
+    ["Xfce桌面安装"]="未执行"
+    ["GNOME桌面安装"]="未执行"
+    ["XRDP远程桌面"]="未执行"
+    ["Docker安装"]="未执行"
+    ["Docker加速配置"]="未执行"
+)
 
-# 已安装列表（用于反馈）
-INSTALLED_LIST=()
-# 安装状态标记
-STATUS_TZ="未执行"
-STATUS_MIRROR="未执行"
-STATUS_BASE="未执行"
-STATUS_CN="未执行"
-STATUS_DESKTOP="未执行"
-STATUS_XRDP="未执行"
-STATUS_DOCKER="未执行"
-STATUS_DOCKER_MIRROR="未执行"
+# 已安装功能列表
+INSTALLED_FEATURES=()
 
-# ===================== 前置检查 =====================
-check_root() {
-    if [ $EUID -ne 0 ]; then
-        error "此脚本需要ROOT权限运行，请执行：sudo ./ubuntu-init.sh"
-    fi
+# ===================== 防重复安装判断函数 =====================
+# 基础判断工具
+is_installed() {
+    command -v "$1" &> /dev/null
 }
 
-install_essential_deps() {
-    title "检查基础依赖包"
-    if ! command -v hwclock &> /dev/null; then
-        info "未检测到hwclock命令，开始安装util-linux包"
-        apt update -y
-        apt install -y util-linux
+file_exists() {
+    [ -f "$1" ]
+}
+
+# 1. 时区是否已设置
+is_timezone_set() {
+    [ "$(timedatectl show -p Timezone --value 2>/dev/null)" == "$TARGET_TIMEZONE" ]
+}
+
+# 2. 软件源是否已更换（检测是否有国内源）
+is_mirror_changed() {
+    grep -q "mirrors.aliyun.com\|mirrors.tuna.tsinghua.edu.cn\|mirrors.163.com\|mirrors.ustc.edu.cn" /etc/apt/sources.list 2>/dev/null
+}
+
+# 3. 基础工具是否已安装
+is_base_tools_installed() {
+    is_installed vim && is_installed git && is_installed curl && is_installed htop
+}
+
+# 4. 中文环境是否已配置
+is_chinese_done() {
+    is_installed locale && locale -a 2>/dev/null | grep -q "zh_CN.utf8"
+}
+
+# 5. Xfce是否安装
+is_xfce_installed() {
+    is_installed xfce4-session
+}
+
+# 6. GNOME是否安装
+is_gnome_installed() {
+    is_installed gnome-shell
+}
+
+# 7. XRDP是否安装
+is_xrdp_installed() {
+    is_installed xrdp && systemctl is-active --quiet xrdp 2>/dev/null
+}
+
+# 8. Docker是否安装
+is_docker_installed() {
+    is_installed docker
+}
+
+# 9. Docker加速是否配置
+is_docker_mirror_configured() {
+    file_exists /etc/docker/daemon.json && grep -q "registry-mirrors" /etc/docker/daemon.json 2>/dev/null
+}
+
+# ===================== 工具函数 =====================
+# 检查ROOT权限
+check_root() {
+    [ $EUID -ne 0 ] && error "请使用ROOT权限运行（sudo ./ubuntu-init.sh）"
+}
+
+# 安装基础依赖
+install_core_deps() {
+    if ! command -v hwclock &>/dev/null; then
+        info "安装util-linux依赖包"
+        apt update -y && apt install -y util-linux
     fi
-    if ! command -v timedatectl &> /dev/null; then
-        info "未检测到timedatectl，开始安装systemd-timesyncd"
+    if ! command -v timedatectl &>/dev/null; then
+        info "安装systemd-timesyncd依赖包"
         apt install -y systemd-timesyncd
     fi
-    info "基础依赖检查完成"
 }
 
-# ===================== 多级菜单交互 =====================
-# 主菜单
-main_menu() {
+# 刷新状态显示
+refresh_status() {
     clear
-    menu_title "Ubuntu 一键初始化脚本 - 主菜单"
-    echo "欢迎使用Ubuntu系统一键初始化脚本！"
-    echo -e "\n请选择操作："
-    echo "1) 进入配置菜单（设置时区/源/桌面/Docker等）"
-    echo "2) 使用默认配置快速执行（时区/源/基础工具/中文环境）"
-    echo "3) 查看已安装列表"
-    echo "0) 退出脚本"
-    read -p "请输入选项（0-3，默认1）：" MAIN_CHOICE
-    MAIN_CHOICE=${MAIN_CHOICE:-1}
-    
-    case $MAIN_CHOICE in
-        1) config_menu ;;
-        2) info "使用默认配置执行，跳过自定义配置" ;;
-        3) show_installed_list ; main_menu ;;
-        0) info "用户退出脚本" ; exit 0 ;;
-        *) error "无效选项，请重新运行脚本" ;;
-    esac
+    menu_head " Ubuntu 一键初始化工具 - 执行状态 "
+    echo -e "┌──────────────────────┬───────────┐"
+    for func in "${!EXEC_STATUS[@]}"; do
+        status=${EXEC_STATUS[$func]}
+        # 状态颜色
+        case $status in
+            "已完成") status="${GREEN}${status}${NC}" ;;
+            "已跳过") status="${YELLOW}${status}${NC}" ;;
+            *) status="${RED}${status}${NC}" ;;
+        esac
+        printf "│ %-20s │ %-9s │\n" "$func" "$status"
+    done
+    echo -e "└──────────────────────┴───────────┘"
 }
 
-# 配置子菜单
-config_menu() {
-    clear
-    menu_title "配置菜单 - 基础设置"
-    # 基础配置
-    read -p "1. 是否设置时区为 ${TARGET_TIMEZONE}？[Y/n] " CHOICE_TZ
-    CHOICE_TZ=${CHOICE_TZ:-Y}
-    read -p "2. 是否更换为 ${TARGET_MIRROR} 软件源？[Y/n] " CHOICE_MIRROR
-    CHOICE_MIRROR=${CHOICE_MIRROR:-Y}
-    read -p "3. 是否安装基础工具（vim/git/curl等）？[Y/n] " CHOICE_BASE
-    CHOICE_BASE=${CHOICE_BASE:-Y}
-    read -p "4. 是否安装中文语言包和字体？[Y/n] " CHOICE_CN
-    CHOICE_CN=${CHOICE_CN:-Y}
-
-    # 桌面环境子菜单
-    desktop_menu
-
-    # Docker配置子菜单
-    docker_menu
-
-    # 配置确认
-    confirm_menu
-}
-
-# 桌面环境子菜单
-desktop_menu() {
-    clear
-    menu_title "配置菜单 - 桌面环境"
-    echo "请选择要安装的桌面环境（二选一或都不装）："
-    echo "1) Xfce：轻量级，占用资源少，适合服务器/低配机器"
-    echo "2) GNOME：Ubuntu官方桌面，功能丰富，占用资源较多"
-    echo "0) 不安装桌面环境（默认）"
-    read -p "请输入选项（0-2，默认0）：" CHOICE_DESKTOP
-    CHOICE_DESKTOP=${CHOICE_DESKTOP:-0}
-    
-    # XRDP配置（仅安装桌面时显示）
-    if [[ $CHOICE_DESKTOP != "0" ]]; then
-        read -p "是否安装XRDP远程桌面（Windows远程桌面直接连接）？[Y/n] " CHOICE_XRDP
-        CHOICE_XRDP=${CHOICE_XRDP:-Y}
+# 显示已安装功能
+show_installed() {
+    menu_head " 已安装功能列表 "
+    if [ ${#INSTALLED_FEATURES[@]} -eq 0 ]; then
+        echo -e "${YELLOW}暂无已安装功能${NC}"
     else
-        CHOICE_XRDP="N"
-    fi
-}
-
-# Docker配置子菜单
-docker_menu() {
-    clear
-    menu_title "配置菜单 - Docker配置"
-    read -p "1. 是否安装Docker + Docker Compose？[y/N] " CHOICE_DOCKER
-    CHOICE_DOCKER=${CHOICE_DOCKER:-N}
-    
-    if [[ $CHOICE_DOCKER =~ ^[Yy]$ ]]; then
-        read -p "2. 是否配置Docker镜像加速？[Y/n] " CHOICE_DOCKER_MIRROR
-        CHOICE_DOCKER_MIRROR=${CHOICE_DOCKER_MIRROR:-Y}
-        
-        if [[ $CHOICE_DOCKER_MIRROR =~ ^[Yy]$ ]]; then
-            echo -e "\n可选的Docker加速源："
-            echo "1) 阿里云（默认，需替换为自己的加速地址）"
-            echo "2) 网易云：https://hub-mirror.c.163.com"
-            echo "3) 科大：https://docker.mirrors.ustc.edu.cn"
-            echo "4) 自定义地址"
-            read -p "请选择Docker加速源（1-4，默认1）：" DOCKER_MIRROR_CHOICE
-            DOCKER_MIRROR_CHOICE=${DOCKER_MIRROR_CHOICE:-1}
-            
-            case $DOCKER_MIRROR_CHOICE in
-                1) 
-                    warn "注意：阿里云镜像加速需要自己申请，地址格式为 https://xxxxxx.mirror.aliyuncs.com"
-                    read -p "请输入你的阿里云Docker加速地址（直接回车使用公共源）：" CUSTOM_MIRROR
-                    DOCKER_REGISTRY_MIRROR=${CUSTOM_MIRROR:-"https://docker.mirrors.ustc.edu.cn"}
-                    ;;
-                2) DOCKER_REGISTRY_MIRROR="https://hub-mirror.c.163.com" ;;
-                3) DOCKER_REGISTRY_MIRROR="https://docker.mirrors.ustc.edu.cn" ;;
-                4) 
-                    read -p "请输入自定义Docker加速地址：" CUSTOM_MIRROR
-                    if [[ -z $CUSTOM_MIRROR ]]; then
-                        error "自定义地址不能为空"
-                    fi
-                    DOCKER_REGISTRY_MIRROR=$CUSTOM_MIRROR
-                    ;;
-                *) DOCKER_REGISTRY_MIRROR="https://docker.mirrors.ustc.edu.cn" ;;
-            esac
-        fi
-    fi
-}
-
-# 配置确认菜单
-confirm_menu() {
-    clear
-    menu_title "配置确认"
-    echo "以下是你的配置选择："
-    echo "==================== 基础配置 ===================="
-    echo "时区设置：${CHOICE_TZ}"
-    echo "更换软件源：${CHOICE_MIRROR}（源类型：${TARGET_MIRROR}）"
-    echo "安装基础工具：${CHOICE_BASE}"
-    echo "安装中文环境：${CHOICE_CN}"
-    echo "==================== 桌面配置 ===================="
-    case $CHOICE_DESKTOP in
-        1) echo "桌面环境：Xfce" ;;
-        2) echo "桌面环境：GNOME" ;;
-        *) echo "桌面环境：不安装" ;;
-    esac
-    echo "安装XRDP远程桌面：${CHOICE_XRDP}"
-    echo "==================== Docker配置 ==================="
-    echo "安装Docker：${CHOICE_DOCKER}"
-    if [[ $CHOICE_DOCKER =~ ^[Yy]$ ]]; then
-        echo "配置Docker加速：${CHOICE_DOCKER_MIRROR}"
-        echo "Docker加速地址：${DOCKER_REGISTRY_MIRROR}"
-    fi
-    
-    read -p "确认执行以上配置？[Y/n] " CONFIRM
-    CONFIRM=${CONFIRM:-Y}
-    if [[ $CONFIRM =~ ^[Nn]$ ]]; then
-        info "用户取消配置，返回主菜单"
-        main_menu
-    fi
-}
-
-# 显示已安装列表
-show_installed_list() {
-    clear
-    menu_title "已安装列表 & 执行状态"
-    echo "==================== 执行状态 ===================="
-    echo "时区设置：${STATUS_TZ}"
-    echo "更换软件源：${STATUS_MIRROR}"
-    echo "安装基础工具：${STATUS_BASE}"
-    echo "安装中文环境：${STATUS_CN}"
-    echo "桌面环境：${STATUS_DESKTOP}"
-    echo "XRDP远程桌面：${STATUS_XRDP}"
-    echo "Docker安装：${STATUS_DOCKER}"
-    echo "Docker加速配置：${STATUS_DOCKER_MIRROR}"
-    
-    echo -e "\n==================== 已安装功能 ===================="
-    if [ ${#INSTALLED_LIST[@]} -eq 0 ]; then
-        echo "暂无已安装项"
-    else
-        for item in "${INSTALLED_LIST[@]}"; do
-            echo "✅ $item"
+        for i in "${!INSTALLED_FEATURES[@]}"; do
+            echo -e "${CYAN}$((i+1)).${NC} ${INSTALLED_FEATURES[$i]}"
         done
     fi
-    
-    read -p "按回车返回主菜单..."
+    echo -e "\n${WHITE}按回车返回菜单...${NC}"
+    read -r
 }
 
-# ===================== 核心功能 =====================
-# 1. 设置时区
-set_timezone() {
-    if [[ ! $CHOICE_TZ =~ ^[Nn]$ ]]; then
-        title "设置系统时区"
+# ===================== 核心功能实现（带防重复） =====================
+# 1. 时区设置
+func_set_timezone() {
+    refresh_status
+    menu_title "时区设置 - ${TARGET_TIMEZONE}"
+    
+    # 防重复判断
+    if is_timezone_set; then
+        success "时区已设置为 ${TARGET_TIMEZONE}，跳过重复操作"
+        EXEC_STATUS["时区设置"]="已完成"
+        echo -e "\n${WHITE}按回车返回菜单...${NC}"
+        read -r
+        return
+    fi
+
+    read -p "确认设置时区为 ${TARGET_TIMEZONE}？[Y/n] " confirm
+    confirm=${confirm:-Y}
+    
+    if [[ $confirm =~ ^[Yy]$ ]]; then
         timedatectl set-timezone ${TARGET_TIMEZONE}
         ln -sf /usr/share/zoneinfo/${TARGET_TIMEZONE} /etc/localtime
-        
-        if command -v hwclock &> /dev/null; then
-            hwclock --systohc 2>/dev/null || warn "硬件时钟同步失败（不影响系统时区）"
-        else
-            warn "未找到hwclock命令，跳过硬件时钟同步"
-        fi
-        
-        success "时区已设置为 ${TARGET_TIMEZONE}"
-        STATUS_TZ="已完成"
-        INSTALLED_LIST+=("时区设置（Asia/Shanghai）")
+        hwclock --systohc 2>/dev/null || warn "硬件时钟同步失败（不影响系统时区）"
+        success "时区设置完成：${TARGET_TIMEZONE}"
+        EXEC_STATUS["时区设置"]="已完成"
+        INSTALLED_FEATURES+=("时区设置（Asia/Shanghai）")
     else
-        STATUS_TZ="已跳过"
+        warn "已跳过时区设置"
+        EXEC_STATUS["时区设置"]="已跳过"
     fi
+    echo -e "\n${WHITE}按回车返回菜单...${NC}"
+    read -r
 }
 
-# 2. 更换软件源
-change_mirror() {
-    if [[ ! $CHOICE_MIRROR =~ ^[Nn]$ ]]; then
-        title "更换${TARGET_MIRROR}软件源"
-        cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%Y%m%d%H%M)
-        
-        case ${TARGET_MIRROR} in
-            aliyun) MIRROR_URL="http://mirrors.aliyun.com/ubuntu/" ;;
-            tuna) MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/ubuntu/" ;;
-            163) MIRROR_URL="http://mirrors.163.com/ubuntu/" ;;
-            ustc) MIRROR_URL="https://mirrors.ustc.edu.cn/ubuntu/" ;;
-            *) error "不支持的源类型：${TARGET_MIRROR}" ;;
-        esac
+# 2. 软件源更换
+func_change_mirror() {
+    refresh_status
+    menu_title "软件源更换 - 可选源：aliyun/tuna/163/ustc"
+    
+    # 防重复判断
+    if is_mirror_changed; then
+        success "软件源已更换为国内源，跳过重复操作"
+        EXEC_STATUS["软件源更换"]="已完成"
+        echo -e "\n${WHITE}按回车返回菜单...${NC}"
+        read -r
+        return
+    fi
 
+    echo "当前默认源：${TARGET_MIRROR}"
+    read -p "是否更换软件源？[Y/n] " confirm
+    confirm=${confirm:-Y}
+    
+    if [[ $confirm =~ ^[Yy]$ ]]; then
+        # 选择源类型
+        echo -e "\n请选择软件源："
+        echo "1) 阿里云（默认）"
+        echo "2) 清华大学"
+        echo "3) 163网易"
+        echo "4) 中国科学技术大学"
+        read -p "输入选项（1-4，默认1）：" mirror_choice
+        mirror_choice=${mirror_choice:-1}
+        
+        case $mirror_choice in
+            1) MIRROR="aliyun"; MIRROR_URL="http://mirrors.aliyun.com/ubuntu/" ;;
+            2) MIRROR="tuna"; MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/ubuntu/" ;;
+            3) MIRROR="163"; MIRROR_URL="http://mirrors.163.com/ubuntu/" ;;
+            4) MIRROR="ustc"; MIRROR_URL="https://mirrors.ustc.edu.cn/ubuntu/" ;;
+            *) MIRROR="aliyun"; MIRROR_URL="http://mirrors.aliyun.com/ubuntu/" ;;
+        esac
+        
+        # 备份并替换源
+        cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%Y%m%d%H%M)
         cat >/etc/apt/sources.list <<EOF
 deb ${MIRROR_URL} ${RELEASE_VERSION} main restricted universe multiverse
 deb-src ${MIRROR_URL} ${RELEASE_VERSION} main restricted universe multiverse
@@ -284,168 +230,322 @@ deb-src ${MIRROR_URL} ${RELEASE_VERSION}-updates main restricted universe multiv
 deb ${MIRROR_URL} ${RELEASE_VERSION}-backports main restricted universe multiverse
 deb-src ${MIRROR_URL} ${RELEASE_VERSION}-backports main restricted universe multiverse
 EOF
-
-        apt update -y
-        apt upgrade -y
-        success "${TARGET_MIRROR}软件源更换完成，已更新系统包"
-        STATUS_MIRROR="已完成"
-        INSTALLED_LIST+=("软件源更换（${TARGET_MIRROR}）")
+        
+        apt update -y && apt upgrade -y
+        success "${MIRROR}软件源更换完成，已更新系统包"
+        EXEC_STATUS["软件源更换"]="已完成"
+        INSTALLED_FEATURES+=("软件源更换（${MIRROR}）")
     else
-        STATUS_MIRROR="已跳过"
+        warn "已跳过软件源更换"
+        EXEC_STATUS["软件源更换"]="已跳过"
     fi
+    echo -e "\n${WHITE}按回车返回菜单...${NC}"
+    read -r
 }
 
-# 3. 安装基础工具
-install_base_tools() {
-    if [[ ! $CHOICE_BASE =~ ^[Nn]$ ]]; then
-        title "安装基础工具"
+# 3. 基础工具安装
+func_install_base() {
+    refresh_status
+    menu_title "基础工具安装 - vim/git/curl/htop等"
+    
+    # 防重复判断
+    if is_base_tools_installed; then
+        success "基础工具已安装完成，跳过重复操作"
+        EXEC_STATUS["基础工具安装"]="已完成"
+        echo -e "\n${WHITE}按回车返回菜单...${NC}"
+        read -r
+        return
+    fi
+
+    read -p "确认安装基础工具？[Y/n] " confirm
+    confirm=${confirm:-Y}
+    
+    if [[ $confirm =~ ^[Yy]$ ]]; then
         apt install -y \
             vim git curl wget net-tools htop lsof tree \
             unzip zip bzip2 rsync screen tmux ncdu sysstat util-linux
-        echo -e "set nu\nset tabstop=4\nset shiftwidth=4" >> /etc/vim/vimrc
-        success "基础工具安装完成（vim/git/curl等）"
-        STATUS_BASE="已完成"
-        INSTALLED_LIST+=("基础工具（vim/git/curl/htop等）")
+        # Vim优化配置
+        grep -q "set nu" /etc/vim/vimrc || echo -e "set nu\nset tabstop=4\nset shiftwidth=4" >> /etc/vim/vimrc
+        success "基础工具安装完成"
+        EXEC_STATUS["基础工具安装"]="已完成"
+        INSTALLED_FEATURES+=("基础工具（vim/git/curl/htop等）")
     else
-        STATUS_BASE="已跳过"
+        warn "已跳过基础工具安装"
+        EXEC_STATUS["基础工具安装"]="已跳过"
     fi
+    echo -e "\n${WHITE}按回车返回菜单...${NC}"
+    read -r
 }
 
-# 4. 安装中文环境
-install_chinese_env() {
-    if [[ ! $CHOICE_CN =~ ^[Nn]$ ]]; then
-        title "安装中文语言包和字体"
+# 4. 中文环境配置
+func_install_chinese() {
+    refresh_status
+    menu_title "中文环境配置 - 语言包+中文字体"
+    
+    # 防重复判断
+    if is_chinese_done; then
+        success "中文环境已配置完成，跳过重复操作"
+        EXEC_STATUS["中文环境配置"]="已完成"
+        echo -e "\n${WHITE}按回车返回菜单...${NC}"
+        read -r
+        return
+    fi
+
+    read -p "确认安装中文环境？[Y/n] " confirm
+    confirm=${confirm:-Y}
+    
+    if [[ $confirm =~ ^[Yy]$ ]]; then
         apt install -y language-pack-zh-hans language-pack-zh-hans-base
         update-locale LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8
-        apt install -y \
-            fonts-wqy-microhei fonts-wqy-zenhei \
-            fonts-noto-cjk fonts-noto-color-emoji
-        success "中文环境配置完成（语言包+中文字体）"
-        STATUS_CN="已完成"
-        INSTALLED_LIST+=("中文环境（语言包+字体）")
+        apt install -y fonts-wqy-microhei fonts-wqy-zenhei fonts-noto-cjk fonts-noto-color-emoji
+        success "中文环境配置完成（语言包+字体）"
+        EXEC_STATUS["中文环境配置"]="已完成"
+        INSTALLED_FEATURES+=("中文环境（语言包+中文字体）")
     else
-        STATUS_CN="已跳过"
+        warn "已跳过中文环境配置"
+        EXEC_STATUS["中文环境配置"]="已跳过"
     fi
+    echo -e "\n${WHITE}按回车返回菜单...${NC}"
+    read -r
 }
 
-# 5. 安装桌面环境
-install_desktop() {
-    if [[ $CHOICE_DESKTOP == "1" ]]; then
-        title "安装Xfce桌面环境"
-        apt install -y xfce4 xfce4-goodies lightdm
-        systemctl set-default graphical.target
-        systemctl enable lightdm
-        success "Xfce桌面安装完成"
-        STATUS_DESKTOP="已完成（Xfce）"
-        INSTALLED_LIST+=("Xfce桌面环境")
+# 5. 桌面环境安装（含XRDP）
+func_install_desktop() {
+    refresh_status
+    menu_title "桌面环境安装 - Xfce/GNOME"
+    
+    # 防重复判断（任意桌面已安装则跳过）
+    if is_xfce_installed || is_gnome_installed; then
+        local desk_type="Xfce"
+        is_gnome_installed && desk_type="GNOME"
+        success "${desk_type}桌面已安装，跳过重复操作"
+        EXEC_STATUS["${desk_type}桌面安装"]="已完成"
+        echo -e "\n${WHITE}按回车返回菜单...${NC}"
+        read -r
+        return
+    fi
+
+    echo "请选择要安装的桌面环境："
+    echo "1) Xfce（轻量级，推荐服务器使用）"
+    echo "2) GNOME（Ubuntu官方桌面）"
+    echo "0) 取消"
+    read -p "输入选项（0-2，默认0）：" desk_choice
+    desk_choice=${desk_choice:-0}
+    
+    case $desk_choice in
+        1)
+            # 安装Xfce
+            apt install -y xfce4 xfce4-goodies lightdm
+            systemctl set-default graphical.target
+            systemctl enable lightdm
+            success "Xfce桌面安装完成"
+            EXEC_STATUS["Xfce桌面安装"]="已完成"
+            INSTALLED_FEATURES+=("Xfce桌面环境")
+            
+            # XRDP安装（带防重复）
+            if is_xrdp_installed; then
+                success "XRDP已安装，跳过重复操作"
+                EXEC_STATUS["XRDP远程桌面"]="已完成"
+            else
+                read -p "是否安装XRDP远程桌面？[Y/n] " xrdp_confirm
+                xrdp_confirm=${xrdp_confirm:-Y}
+                if [[ $xrdp_confirm =~ ^[Yy]$ ]]; then
+                    apt install -y xrdp
+                    adduser xrdp ssl-cert
+                    ufw allow 3389/tcp 2>/dev/null || true
+                    systemctl enable --now xrdp
+                    success "XRDP远程桌面安装完成"
+                    success "连接地址：$(hostname -I | awk '{print $1}'):3389"
+                    EXEC_STATUS["XRDP远程桌面"]="已完成"
+                    INSTALLED_FEATURES+=("XRDP远程桌面（3389端口）")
+                else
+                    EXEC_STATUS["XRDP远程桌面"]="已跳过"
+                fi
+            fi
+            ;;
+        2)
+            # 安装GNOME
+            apt install -y ubuntu-desktop gnome-tweaks chrome-gnome-shell
+            systemctl set-default graphical.target
+            success "GNOME桌面安装完成"
+            EXEC_STATUS["GNOME桌面安装"]="已完成"
+            INSTALLED_FEATURES+=("GNOME桌面环境")
+            
+            # XRDP安装（带防重复）
+            if is_xrdp_installed; then
+                success "XRDP已安装，跳过重复操作"
+                EXEC_STATUS["XRDP远程桌面"]="已完成"
+            else
+                read -p "是否安装XRDP远程桌面？[Y/n] " xrdp_confirm
+                xrdp_confirm=${xrdp_confirm:-Y}
+                if [[ $xrdp_confirm =~ ^[Yy]$ ]]; then
+                    apt install -y xrdp
+                    adduser xrdp ssl-cert
+                    ufw allow 3389/tcp 2>/dev/null || true
+                    systemctl enable --now xrdp
+                    success "XRDP远程桌面安装完成"
+                    success "连接地址：$(hostname -I | awk '{print $1}'):3389"
+                    EXEC_STATUS["XRDP远程桌面"]="已完成"
+                    INSTALLED_FEATURES+=("XRDP远程桌面（3389端口）")
+                else
+                    EXEC_STATUS["XRDP远程桌面"]="已跳过"
+                fi
+            fi
+            ;;
+        0)
+            warn "已取消桌面环境安装"
+            EXEC_STATUS["Xfce桌面安装"]="已跳过"
+            EXEC_STATUS["GNOME桌面安装"]="已跳过"
+            ;;
+        *)
+            error "无效选项"
+            ;;
+    esac
+    echo -e "\n${WHITE}按回车返回菜单...${NC}"
+    read -r
+}
+
+# 6. Docker安装（含加速）
+func_install_docker() {
+    refresh_status
+    menu_title "Docker安装 - Docker + Compose + 镜像加速"
+    
+    # 防重复判断
+    if is_docker_installed; then
+        success "Docker已安装完成，跳过重复操作"
+        EXEC_STATUS["Docker安装"]="已完成"
         
-        # 安装XRDP（如果选择）
-        install_xrdp
-    elif [[ $CHOICE_DESKTOP == "2" ]]; then
-        title "安装GNOME桌面环境"
-        apt install -y ubuntu-desktop
-        apt install -y gnome-tweaks chrome-gnome-shell
-        systemctl set-default graphical.target
-        success "GNOME桌面安装完成"
-        STATUS_DESKTOP="已完成（GNOME）"
-        INSTALLED_LIST+=("GNOME桌面环境")
-        
-        # 安装XRDP（如果选择）
-        install_xrdp
-    else
-        STATUS_DESKTOP="已跳过"
+        # 检查Docker加速配置
+        if is_docker_mirror_configured; then
+            success "Docker加速已配置，跳过重复操作"
+            EXEC_STATUS["Docker加速配置"]="已完成"
+        fi
+        echo -e "\n${WHITE}按回车返回菜单...${NC}"
+        read -r
+        return
     fi
-}
 
-# 6. 安装XRDP远程桌面
-install_xrdp() {
-    if [[ $CHOICE_XRDP =~ ^[Yy]$ ]]; then
-        title "安装XRDP远程桌面"
-        apt install -y xrdp
-        # 配置XRDP（解决权限问题）
-        adduser xrdp ssl-cert
-        systemctl enable --now xrdp
-        # 开放3389端口（如果开启防火墙）
-        ufw allow 3389/tcp 2>/dev/null || true
-        success "XRDP远程桌面安装完成！"
-        success "Windows远程桌面连接地址：$(hostname -I | awk '{print $1}'):3389"
-        STATUS_XRDP="已完成"
-        INSTALLED_LIST+=("XRDP远程桌面（3389端口）")
-    else
-        STATUS_XRDP="已跳过"
-    fi
-}
-
-# 7. 安装Docker（含加速）
-install_docker() {
-    if [[ $CHOICE_DOCKER =~ ^[Yy]$ ]]; then
-        title "安装Docker和Docker Compose"
+    read -p "确认安装Docker + Docker Compose？[y/N] " confirm
+    confirm=${confirm:-N}
+    
+    if [[ $confirm =~ ^[Yy]$ ]]; then
+        # 安装Docker依赖
         apt install -y apt-transport-https ca-certificates curl gnupg-agent software-properties-common
-        
-        # Docker安装加速
+        # Docker源配置
         curl -fsSL ${DOCKER_MIRROR}gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] ${DOCKER_MIRROR}linux/ubuntu ${RELEASE_VERSION} stable" | tee /etc/apt/sources.list.d/docker.list >/dev/null
         
-        apt update -y
-        apt install -y docker-ce docker-ce-cli containerd.io
-        
-        # 安装Docker Compose
+        # 安装Docker
+        apt update -y && apt install -y docker-ce docker-ce-cli containerd.io
+        # 安装Compose
         curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         chmod +x /usr/local/bin/docker-compose
         
-        # Docker加速配置
-        if [[ $CHOICE_DOCKER_MIRROR =~ ^[Yy]$ ]]; then
-            mkdir -p /etc/docker
-            cat > /etc/docker/daemon.json << EOF
+        success "Docker + Docker Compose安装完成"
+        EXEC_STATUS["Docker安装"]="已完成"
+        INSTALLED_FEATURES+=("Docker + Docker Compose")
+        
+        # Docker加速配置（带防重复）
+        if is_docker_mirror_configured; then
+            success "Docker加速已配置，跳过重复操作"
+            EXEC_STATUS["Docker加速配置"]="已完成"
+        else
+            read -p "是否配置Docker镜像加速？[Y/n] " mirror_confirm
+            mirror_confirm=${mirror_confirm:-Y}
+            if [[ $mirror_confirm =~ ^[Yy]$ ]]; then
+                echo -e "\n请选择Docker加速源："
+                echo "1) 科大源（默认，无需申请）"
+                echo "2) 网易云源"
+                echo "3) 阿里云源（需自行申请）"
+                echo "4) 自定义地址"
+                read -p "输入选项（1-4，默认1）：" docker_mirror_choice
+                docker_mirror_choice=${docker_mirror_choice:-1}
+                
+                case $docker_mirror_choice in
+                    1) DOCKER_REGISTRY_MIRROR="https://docker.mirrors.ustc.edu.cn" ;;
+                    2) DOCKER_REGISTRY_MIRROR="https://hub-mirror.c.163.com" ;;
+                    3)
+                        read -p "请输入阿里云加速地址：" ali_mirror
+                        DOCKER_REGISTRY_MIRROR=${ali_mirror:-"https://docker.mirrors.ustc.edu.cn"}
+                        ;;
+                    4)
+                        read -p "请输入自定义加速地址：" custom_mirror
+                        [ -z "$custom_mirror" ] && error "自定义地址不能为空"
+                        DOCKER_REGISTRY_MIRROR=$custom_mirror
+                        ;;
+                    *) DOCKER_REGISTRY_MIRROR="https://docker.mirrors.ustc.edu.cn" ;;
+                esac
+                
+                # 配置加速
+                mkdir -p /etc/docker
+                cat >/etc/docker/daemon.json <<EOF
 {
   "registry-mirrors": ["${DOCKER_REGISTRY_MIRROR}"]
 }
 EOF
-            systemctl daemon-reload
-            systemctl restart docker
-            success "Docker镜像加速配置完成，加速地址：${DOCKER_REGISTRY_MIRROR}"
-            STATUS_DOCKER_MIRROR="已完成"
-            INSTALLED_LIST+=("Docker镜像加速（${DOCKER_REGISTRY_MIRROR}）")
-        else
-            STATUS_DOCKER_MIRROR="已跳过"
+                systemctl daemon-reload && systemctl restart docker
+                success "Docker镜像加速配置完成：${DOCKER_REGISTRY_MIRROR}"
+                EXEC_STATUS["Docker加速配置"]="已完成"
+                INSTALLED_FEATURES+=("Docker镜像加速（${DOCKER_REGISTRY_MIRROR}）")
+            else
+                warn "已跳过Docker加速配置"
+                EXEC_STATUS["Docker加速配置"]="已跳过"
+            fi
         fi
         
+        # 配置Docker权限
         systemctl enable --now docker
         usermod -aG docker $SUDO_USER 2>/dev/null || true
-        success "Docker + Docker Compose安装完成！"
-        STATUS_DOCKER="已完成"
-        INSTALLED_LIST+=("Docker + Docker Compose")
     else
-        STATUS_DOCKER="已跳过"
-        STATUS_DOCKER_MIRROR="未执行"
+        warn "已跳过Docker安装"
+        EXEC_STATUS["Docker安装"]="已跳过"
+        EXEC_STATUS["Docker加速配置"]="已跳过"
     fi
+    echo -e "\n${WHITE}按回车返回菜单...${NC}"
+    read -r
+}
+
+# ===================== 多级菜单定义 =====================
+# 主菜单
+main_menu() {
+    while true; do
+        refresh_status
+        menu_head " 主菜单 - 功能选择 "
+        echo "请选择要执行的功能（输入数字）："
+        echo "1) 时区设置                2) 软件源更换"
+        echo "3) 基础工具安装            4) 中文环境配置"
+        echo "5) 桌面环境安装（含XRDP）  6) Docker安装（含加速）"
+        echo "7) 查看已安装功能          0) 退出脚本"
+        echo -e "${WHITE}"
+        read -p "请输入选项（0-7）：" choice
+        
+        case $choice in
+            1) func_set_timezone ;;
+            2) func_change_mirror ;;
+            3) func_install_base ;;
+            4) func_install_chinese ;;
+            5) func_install_desktop ;;
+            6) func_install_docker ;;
+            7) show_installed ;;
+            0)
+                info "感谢使用，脚本退出"
+                exit 0
+                ;;
+            *)
+                error "无效选项，请输入0-7之间的数字"
+                ;;
+        esac
+    done
 }
 
 # ===================== 主流程 =====================
 main() {
     # 前置检查
     check_root
-    install_essential_deps
-    # 启动多级菜单
+    install_core_deps
+    
+    # 启动主菜单
     main_menu
-    
-    # 执行核心功能
-    set_timezone
-    change_mirror
-    install_base_tools
-    install_chinese_env
-    install_desktop  # 包含XRDP安装
-    install_docker
-
-    # 完成提示
-    title "初始化完成"
-    success "✅ 所有选择的配置已执行完毕！"
-    info "💡 建议执行重启使配置生效：sudo reboot"
-    info "🌐 XRDP远程桌面连接地址：$(hostname -I | awk '{print $1}'):3389"
-    info "🐳 Docker验证命令：docker -v && docker compose version"
-    
-    # 显示已安装列表
-    show_installed_list
 }
 
 # 启动脚本
