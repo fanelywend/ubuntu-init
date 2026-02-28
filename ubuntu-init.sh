@@ -196,36 +196,47 @@ install_core_deps() {
     info "基础依赖检查完成"
 }
 
-# 刷新状态显示（保留颜色+完美对齐）
+# 刷新状态显示（颜色正常+绝对对齐）
 refresh_status() {
     clear
-    menu_head " Ubuntu 一键初始化工具 - 系统实际安装状态 "
+    # 纯文本标题，避免颜色干扰
+    echo -e "\n=====  Ubuntu 一键初始化工具 - 系统实际安装状态  ====="
     echo -e "┌──────────────────────┬───────────┐"
-    for func in "${!EXEC_STATUS[@]}"; do
-        # 1. 处理功能名称：固定20字符，不足补空格
-        func_aligned=$(printf "%-20s" "$func")
+    
+    # 定义功能列表（固定顺序，避免遍历顺序乱）
+    local funcs=(
+        "XRDP远程桌面" "时区设置" "Xfce桌面安装" 
+        "Docker加速配置" "中文环境配置" "软件源更换" 
+        "GNOME桌面安装" "基础工具安装" "Docker安装"
+    )
+    
+    # 遍历固定列表，逐行精准对齐
+    for func in "${funcs[@]}"; do
+        status=${EXEC_STATUS[$func]}
         
-        # 2. 处理状态：先获取纯文本，计算长度，再拼接颜色
-        pure_status=${EXEC_STATUS[$func]}
-        case $pure_status in
+        # 1. 功能名称：强制补空格到20字符（核心对齐）
+        printf -v func_aligned "%-20s" "$func"
+        
+        # 2. 状态：带颜色+强制补空格到9字符
+        case $status in
             "已安装") 
-                # 纯文本长度3，补6个空格到9字符，再套颜色
-                status_aligned=$(printf "%-9s" "$pure_status")
-                colored_status="${GREEN}${status_aligned}${NC}"
+                printf -v status_aligned "%-9s" "已安装"
+                colored_status="\033[32m${status_aligned}\033[0m"
                 ;;
             "未安装") 
-                status_aligned=$(printf "%-9s" "$pure_status")
-                colored_status="${RED}${status_aligned}${NC}"
+                printf -v status_aligned "%-9s" "未安装"
+                colored_status="\033[31m${status_aligned}\033[0m"
                 ;;
             *) 
-                status_aligned=$(printf "%-9s" "未知")
-                colored_status="${YELLOW}${status_aligned}${NC}"
+                printf -v status_aligned "%-9s" "未知"
+                colored_status="\033[33m${status_aligned}\033[0m"
                 ;;
         esac
         
-        # 3. 用echo -e输出，强制解析颜色转义符，保证对齐
+        # 3. 输出：用echo -e解析颜色，固定格式
         echo -e "│ ${func_aligned} │ ${colored_status} │"
     done
+    
     echo -e "└──────────────────────┴───────────┘"
 }
 
