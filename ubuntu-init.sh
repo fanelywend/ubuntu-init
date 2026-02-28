@@ -28,6 +28,23 @@ check_root() {
     fi
 }
 
+# 检查并安装必要依赖（解决hwclock缺失问题）
+install_essential_deps() {
+    title "检查基础依赖包"
+    # 检查hwclock命令是否存在，不存在则安装util-linux
+    if ! command -v hwclock &> /dev/null; then
+        info "未检测到hwclock命令，开始安装util-linux包"
+        apt update -y
+        apt install -y util-linux
+    fi
+    # 检查timedatectl（系统时间管理）
+    if ! command -v timedatectl &> /dev/null; then
+        info "未检测到timedatectl，开始安装systemd-timesyncd"
+        apt install -y systemd-timesyncd
+    fi
+    info "基础依赖检查完成"
+}
+
 # ===================== 交互式选择 =====================
 select_options() {
     clear
@@ -73,9 +90,17 @@ select_options() {
 set_timezone() {
     if [[ ! $CHOICE_TZ =~ ^[Nn]$ ]]; then
         title "设置系统时区"
+        # 核心时区配置（兼容所有Ubuntu版本）
         timedatectl set-timezone ${TARGET_TIMEZONE}
         ln -sf /usr/share/zoneinfo/${TARGET_TIMEZONE} /etc/localtime
-        hwclock --systohc
+        
+        # hwclock同步硬件时钟（增加容错，失败不中断）
+        if command -v hwclock &> /dev/null; then
+            hwclock --systohc 2>/dev/null || warn "硬件时钟同步失败（不影响系统时区）"
+        else
+            warn "未找到hwclock命令，跳过硬件时钟同步"
+        fi
+        
         info "时区已设置为 ${TARGET_TIMEZONE}"
     fi
 }
@@ -130,7 +155,7 @@ install_base_tools() {
         title "安装基础工具"
         apt install -y \
             vim git curl wget net-tools htop lsof tree \
-            unzip zip bzip2 rsync screen tmux ncdu sysstat
+            unzip zip bzip2 rsync screen tmux ncdu sysstat util-linux
         # 优化vim配置
         echo -e "set nu\nset tabstop=4\nset shiftwidth=4" >> /etc/vim/vimrc
         info "基础工具安装完成"
@@ -201,6 +226,8 @@ install_docker() {
 main() {
     # 前置检查
     check_root
+    # 安装核心依赖（解决hwclock缺失）
+    install_essential_deps
     # 交互式选择配置
     select_options
     # 执行核心功能
