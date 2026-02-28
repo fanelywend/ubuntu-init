@@ -177,13 +177,22 @@ check_root() {
 
 install_core_deps() {
     info "检查基础依赖包..."
-    if ! is_installed hwclock; then
-        apt update -y >/dev/null 2>&1
-        apt install -y util-linux >/dev/null 2>&1
+    # 核心优化1：优先检查本地是否已安装，避免无用的apt update
+    if is_installed hwclock && is_installed timedatectl; then
+        info "基础依赖已安装，无需检查"
+        return
     fi
-    if ! is_installed timedatectl; then
-        apt install -y systemd-timesyncd >/dev/null 2>&1
+    
+    # 核心优化2：apt update 添加超时（10秒），并取消全静默
+    info "正在更新软件源（超时10秒）..."
+    if ! timeout 10 apt update -y; then
+        warn "软件源更新超时（网络/源问题），跳过更新，直接安装依赖"
     fi
+    
+    # 核心优化3：安装依赖时显示简单进度，不静默
+    info "安装基础依赖包..."
+    apt install -y util-linux systemd-timesyncd --no-install-recommends
+    
     info "基础依赖检查完成"
 }
 
