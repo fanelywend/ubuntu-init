@@ -26,11 +26,7 @@
 
 ## 🛠️ 使用方法
 
-### 1. 下载脚本
+### 🔥 一键运行（推荐）
+直接执行以下命令，无需手动下载脚本，自动拉取并运行：
 ```bash
-# 方式1：直接从 GitHub 克隆（推荐）
-git clone https://github.com/fanelywend/ubuntu-init-script.git
-cd ubuntu-init-script
-
-# 方式2：直接下载脚本文件
-curl -O https://raw.githubusercontent.com/fanelywend/ubuntu-init-script/main/ubuntu-init.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/fanelywend/ubuntu-init/main/ubuntu-init.sh)
