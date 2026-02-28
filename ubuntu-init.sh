@@ -196,12 +196,12 @@ refresh_status() {
         status=${EXEC_STATUS[$func]}
         # 状态颜色（仅在输出时解析转义符）
         case $status in
-            "已安装") status="${GREEN}${status}${NC}" ;;
-            "未安装") status="${RED}${status}${NC}" ;;
-            *) status="${YELLOW}未知${NC}" ;;
+            "已安装") color="${GREEN}" ;;
+            "未安装") color="${RED}" ;;
+            *) color="${YELLOW}" ;;
         esac
         # 格式化输出，确保对齐（解决排版混乱）
-        printf "│ %-20s │ %-9s │\n" "$func" "$status"
+        printf "│ %-20s │ %b%-9s%b │\n" "$func" "$color" "$status" "$NC"
     done
     echo -e "└──────────────────────┴───────────┘"
 }
