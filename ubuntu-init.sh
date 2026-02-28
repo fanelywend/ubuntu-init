@@ -187,24 +187,35 @@ install_core_deps() {
     info "基础依赖检查完成"
 }
 
-# 刷新状态显示（完美对齐+颜色正常）
+# 刷新状态显示（保留颜色+完美对齐）
 refresh_status() {
     clear
     menu_head " Ubuntu 一键初始化工具 - 系统实际安装状态 "
     echo -e "┌──────────────────────┬───────────┐"
     for func in "${!EXEC_STATUS[@]}"; do
-        status=${EXEC_STATUS[$func]}
-        # 第一步：先获取纯文本状态（无颜色），用于计算长度
-        local pure_status=$status
-        # 第二步：生成带颜色的状态（仅用于显示）
+        # 1. 处理功能名称：固定20字符，不足补空格
+        func_aligned=$(printf "%-20s" "$func")
+        
+        # 2. 处理状态：先获取纯文本，计算长度，再拼接颜色
+        pure_status=${EXEC_STATUS[$func]}
         case $pure_status in
-            "已安装") colored_status="${GREEN}${pure_status}${NC}" ;;
-            "未安装") colored_status="${RED}${pure_status}${NC}" ;;
-            *) colored_status="${YELLOW}未知${NC}" ;;
+            "已安装") 
+                # 纯文本长度3，补6个空格到9字符，再套颜色
+                status_aligned=$(printf "%-9s" "$pure_status")
+                colored_status="${GREEN}${status_aligned}${NC}"
+                ;;
+            "未安装") 
+                status_aligned=$(printf "%-9s" "$pure_status")
+                colored_status="${RED}${status_aligned}${NC}"
+                ;;
+            *) 
+                status_aligned=$(printf "%-9s" "未知")
+                colored_status="${YELLOW}${status_aligned}${NC}"
+                ;;
         esac
-        # 第三步：仅对纯文本填充空格（保证对齐），再拼接颜色
-        # 功能名称固定20字符，状态纯文本固定9字符
-        printf "│ %-20s │ %b │\n" "$func" "$(printf "%-9s" "$colored_status")"
+        
+        # 3. 用echo -e输出，强制解析颜色转义符，保证对齐
+        echo -e "│ ${func_aligned} │ ${colored_status} │"
     done
     echo -e "└──────────────────────┴───────────┘"
 }
