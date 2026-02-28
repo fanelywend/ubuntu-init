@@ -27,6 +27,6 @@
 ## 🛠️ 使用方法
 
 ### 🔥 一键运行（推荐）
-直接执行以下命令，无需手动下载脚本，自动拉取并运行：
+
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/fanelywend/ubuntu-init/main/ubuntu-init.sh)
