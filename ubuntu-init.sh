@@ -196,46 +196,22 @@ install_core_deps() {
     info "基础依赖检查完成"
 }
 
-# 刷新状态显示（颜色正常+绝对对齐）
+# 刷新状态显示（手动对齐+颜色正常，100%生效）
 refresh_status() {
     clear
-    # 纯文本标题，避免颜色干扰
     echo -e "\n=====  Ubuntu 一键初始化工具 - 系统实际安装状态  ====="
     echo -e "┌──────────────────────┬───────────┐"
     
-    # 定义功能列表（固定顺序，避免遍历顺序乱）
-    local funcs=(
-        "XRDP远程桌面" "时区设置" "Xfce桌面安装" 
-        "Docker加速配置" "中文环境配置" "软件源更换" 
-        "GNOME桌面安装" "基础工具安装" "Docker安装"
-    )
-    
-    # 遍历固定列表，逐行精准对齐
-    for func in "${funcs[@]}"; do
-        status=${EXEC_STATUS[$func]}
-        
-        # 1. 功能名称：强制补空格到20字符（核心对齐）
-        printf -v func_aligned "%-20s" "$func"
-        
-        # 2. 状态：带颜色+强制补空格到9字符
-        case $status in
-            "已安装") 
-                printf -v status_aligned "%-9s" "已安装"
-                colored_status="\033[32m${status_aligned}\033[0m"
-                ;;
-            "未安装") 
-                printf -v status_aligned "%-9s" "未安装"
-                colored_status="\033[31m${status_aligned}\033[0m"
-                ;;
-            *) 
-                printf -v status_aligned "%-9s" "未知"
-                colored_status="\033[33m${status_aligned}\033[0m"
-                ;;
-        esac
-        
-        # 3. 输出：用echo -e解析颜色，固定格式
-        echo -e "│ ${func_aligned} │ ${colored_status} │"
-    done
+    # 手动定义每行内容，精准补空格（按中文终端显示宽度）
+    echo -e "│ XRDP远程桌面         │ $( [ "${EXEC_STATUS["XRDP远程桌面"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
+    echo -e "│ 时区设置             │ $( [ "${EXEC_STATUS["时区设置"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
+    echo -e "│ Xfce桌面安装         │ $( [ "${EXEC_STATUS["Xfce桌面安装"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
+    echo -e "│ Docker加速配置       │ $( [ "${EXEC_STATUS["Docker加速配置"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
+    echo -e "│ 中文环境配置         │ $( [ "${EXEC_STATUS["中文环境配置"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
+    echo -e "│ 软件源更换           │ $( [ "${EXEC_STATUS["软件源更换"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
+    echo -e "│ GNOME桌面安装        │ $( [ "${EXEC_STATUS["GNOME桌面安装"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
+    echo -e "│ 基础工具安装         │ $( [ "${EXEC_STATUS["基础工具安装"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
+    echo -e "│ Docker安装           │ $( [ "${EXEC_STATUS["Docker安装"]}" = "已安装" ] && echo -e "\033[32m已安装     \033[0m" || echo -e "\033[31m未安装     \033[0m" ) │"
     
     echo -e "└──────────────────────┴───────────┘"
 }
